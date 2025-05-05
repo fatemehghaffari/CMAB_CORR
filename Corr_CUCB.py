@@ -1,36 +1,39 @@
-import numpy as np
+import numpy as np 
 
 class CorruptedCUCB:
-    """
-    CUCB algorithm for combinatorial semi-bandits without probabilistic triggering,
-    with known total corruption budget C.
-
-    Parameters
-    ----------
-    env: object
-        Must implement step(action: List[int]) -> (obs, rewards, done, info),
-        where `rewards` is a list/array of rewards for each arm in the chosen action.
-    d: int
-        Size of the super-arm (d < K).
-    C: float
-        Known total corruption budget.
-    T: int
-        Time horizon (number of rounds).
-    """
     def __init__(self, env, d, C, T):
         self.env = env
         self.K = env.n_arms
-        assert 1 <= d < self.K, "d must be in [1, K-1]"
         self.d = d
         self.C = C
         self.T = T
-        # track selections for regret calc
         self.selections = []
+        # per-arm statistics
+        self.T_i = np.zeros(self.K, dtype=int)
+        self.mu_hat = np.zeros(self.K)
+
+        # track time
+        self.t = 0
 
     def _greedy_top_d(self, values):
-        # return indices of top-d entries in `values`
         return list(np.argpartition(values, -self.d)[-self.d:])
 
+    def select(self):
+        """
+        Choose a super-arm (list of d arms) based on current UCB estimates.
+        """
+        self.t += 1
+        UCB = np.zeros(self.K)
+        for i in range(self.K):
+            if self.T_i[i] == 0:
+                UCB[i] = np.inf
+            else:
+                bonus = np.sqrt(3 * np.log(self.t) / (2 * self.T_i[i]))
+                corr_bonus = self.C / (self.d * self.T_i[i])
+                UCB[i] = self.mu_hat[i] + bonus + corr_bonus
+        self.current_S = self._greedy_top_d(UCB)
+        return self.current_S
+    
     def run(self):
         T_i = np.zeros(self.K, dtype=int)
         mu_hat = np.zeros(self.K)
@@ -60,17 +63,23 @@ class CorruptedCUCB:
 
         return np.array(rewards_history)
 
+    def update(self, rewards):
+        """
+        Update internal statistics given rewards from last selected super-arm.
+        rewards: array of length d corresponding to current_S
+        """
+        for idx, arm in enumerate(self.current_S):
+            r = rewards[idx]
+            self.T_i[arm] += 1
+            self.mu_hat[arm] += (r - self.mu_hat[arm]) / self.T_i[arm]
+            
     def compute_regret(self):
-        """
-        Compute per-round regret based on true arm means stored in env.original_means.
-        Regret per round = mu_star - aggregated mean of the selected super-arm.
-        Returns: numpy array of length T with regrets.
-        """
         mu = np.array(self.env.original_means)
-        mu_star = np.max(mu)
+        # best super-arm of size d: sum of top-d means
+        best_super = list(np.argsort(mu)[-self.d:])
+        mu_star = np.sum(mu[best_super])
         regrets = []
         for S in self.selections:
-            # linear aggregation only
             mean_reward = np.sum(mu[S])
             regrets.append(mu_star - mean_reward)
         return np.array(regrets)
