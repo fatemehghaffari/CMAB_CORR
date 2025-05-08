@@ -26,7 +26,7 @@ class CBARBAR:
     d: int
         Maximum super-arm size.
     """
-    def __init__(self, env, oracle, T, alpha, beta, delta, d):
+    def __init__(self, env, oracle, T, alpha, beta, delta, d, reward_function = "linear"):
         self.env = env
         self.oracle = oracle
         self.T = T
@@ -36,17 +36,21 @@ class CBARBAR:
         self.d = d
         self.K = env.n_arms
         self.selections = []
-        self.linear = "linear"
+        self.reward_function = reward_function
         true_mu = np.array(env.original_means)
         self.best_super = self.oracle(true_mu, include=None)
         self.mu_star = self.reward_func(true_mu[self.best_super])
+
+
     def reward_func(self, rewards):
         """
         Aggregates a list of arm rewards into a super-arm reward.
         If linear, returns sum; otherwise placeholder for non-linear.
         """
-        if self.linear:
+        if self.reward_function == 'linear':
             return np.sum(rewards)
+        elif self.reward_function == 'cascadian':
+            return 1 - np.prod(1 - rewards)
         # non-linear aggregator goes here
         raise NotImplementedError("Non-linear reward aggregation not yet implemented")
 
@@ -57,7 +61,7 @@ class CBARBAR:
         Z_star = self.oracle(np.zeros(self.K))
 
         # λ ← 1024 · [log₂(8K / (δ · (log₂ T)²))]²
-        lam = 4 * np.log2(((8 * self.K) / (self.delta)) * (np.log2(self.T)))
+        lam = 64 * np.log2(((8 * self.K) / (self.delta)) * (np.log2(self.T)))
         t = 0
         cumulative_rewards = []
         m = 1
@@ -105,8 +109,8 @@ class CBARBAR:
                 Z_i[i] = self.oracle(LCB, include=i)
             Z_star = self.oracle(LCB)
             # compute empirical rewards under current LCB
-            r_star = np.sum(UCB[self.oracle(UCB)])
-            r_i = np.array([np.sum(LCB[z]) for z in Z_i])
+            r_star = self.reward_func(UCB[self.oracle(UCB)])
+            r_i = np.array([self.reward_func(LCB[z]) for z in Z_i])
             # print("r_star", r_star)
             # print("r_i", r_i)
 
@@ -133,8 +137,8 @@ class CBARBAR:
         regrets = []
         for S in self.selections:
             mean_reward = self.reward_func(mu[S])
+
             regrets.append(self.mu_star - mean_reward)
-            # print("regret", self.mu_star, mean_reward)
         return np.array(regrets)
 
 

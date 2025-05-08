@@ -1,7 +1,7 @@
 import numpy as np 
 
 class CorruptedCUCB:
-    def __init__(self, env, d, C, T):
+    def __init__(self, env, d, C, T, excluded_policy=None, reward_function = "linear"):
         self.env = env
         self.K = env.n_arms
         self.d = d
@@ -11,12 +11,28 @@ class CorruptedCUCB:
         # per-arm statistics
         self.T_i = np.zeros(self.K, dtype=int)
         self.mu_hat = np.zeros(self.K)
-
+        self.excluded_policy = excluded_policy
         # track time
         self.t = 0
-
+        self.reward_function = reward_function
+        
+    def reward_func(self, rewards):
+        """
+        Aggregates a list of arm rewards into a super-arm reward.
+        If linear, returns sum; otherwise placeholder for non-linear.
+        """
+        if self.reward_function == 'linear':
+            return np.sum(rewards)
+        elif self.reward_function == 'cascadian':
+            return 1 - np.prod(1 - rewards)
+        # non-linear aggregator goes here
+        raise NotImplementedError("Non-linear reward aggregation not yet implemented")
+    
     def _greedy_top_d(self, values):
-        return list(np.argpartition(values, -self.d)[-self.d:])
+        top_d = list(np.argpartition(values, -self.d)[-self.d:])
+        if self.excluded_policy and (set(self.excluded_policy) == set(top_d)):
+            return list(np.argpartition(values, -self.d)[-self.d-1:-1])
+        return top_d
 
     def select(self):
         """
@@ -57,7 +73,8 @@ class CorruptedCUCB:
                 r = rec[idx]
                 T_i[arm] += 1
                 mu_hat[arm] += (r - mu_hat[arm]) / T_i[arm]
-                cumulative_reward += r
+                # cumulative_reward += r
+            cumulative_reward += self.reward_func(rec)
             rewards_history.append(cumulative_reward)
             self.selections.append(S)
 
@@ -77,9 +94,9 @@ class CorruptedCUCB:
         mu = np.array(self.env.original_means)
         # best super-arm of size d: sum of top-d means
         best_super = list(np.argsort(mu)[-self.d:])
-        mu_star = np.sum(mu[best_super])
+        mu_star = self.reward_func(mu[best_super])
         regrets = []
         for S in self.selections:
-            mean_reward = np.sum(mu[S])
+            mean_reward = self.reward_func(mu[S])
             regrets.append(mu_star - mean_reward)
         return np.array(regrets)

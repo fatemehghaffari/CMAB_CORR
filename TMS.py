@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class TwoModelSelect:
     """
     TwoModelSelect: Adaptive Gap-Tester for CMAB (Algorithm 4 in MSC paper) citeturn5file2.
@@ -20,11 +21,13 @@ class TwoModelSelect:
     linear: bool
         If True, use linear reward aggregation.
     """
-    def __init__(self, env, L, pi_hat, challenger, beta1, beta2, beta3, beta4, T, linear=True):
+    def __init__(self, env, L, delta, d, pi_hat, beta1, beta2, beta3, beta4, T, linear=True):
         self.env = env
         self.L = L
+        self.delta = delta
+        self.d = d
         self.pi_hat = pi_hat
-        self.challenger = challenger
+        # self.challenger = challenger
         self.beta1 = beta1
         self.beta2 = beta2
         self.beta3 = beta3
@@ -56,6 +59,8 @@ class TwoModelSelect:
         -------
         numpy.ndarray of regrets over at most L rounds.
         """
+        from BASIC import GCOBE
+
         # Initialize gap estimate and epoch length
         delta_hat = min(np.sqrt(self.beta4 / self.L), 1.0)
         M = int(np.ceil(self.beta4 / (delta_hat ** 2)))
@@ -71,6 +76,7 @@ class TwoModelSelect:
             # if hasattr(self.challenger, 'reset'):
             #     self.challenger.reset()
             # Statistics
+            challenger = GCOBE(self.env, M - 1, self.delta, self.d, self.beta1, self.beta2, self.beta3, linear=True)
             sum0 = 0.0
             sum1 = 0.0
             count0 = 0
@@ -79,9 +85,7 @@ class TwoModelSelect:
             # Play up to M rounds or until L
             while t <= t_j + M - 1 and t <= self.L:
                 if np.random.rand() < p_j:
-                    S = self.challenger.select()
-                    _, rec, _, _ = self.env.step(S)
-                    self.challenger.update(rec)
+                    _, rec = challenger.cobe(1, excluded_policy = self.pi_hat, return_regrets=True)
                     r = self.reward_agg(rec)
                     sum1 += r
                     count1 += 1

@@ -10,16 +10,21 @@ def test_cbarbar_no_corruption():
             self.n_arms = len(means)
             self.original_means = means
 
-        def step(self, action):
+        def step(self, action, corr_percent = 0.4):
             # action: list of arms to pull
             rewards = (np.random.rand(len(action)) < self.means[action]).astype(float)
+            if corr_percent > 0:
+                # Generate a mask indicating which bits to flip
+                flip_mask = np.random.rand(len(rewards)) < corr_percent
+                # Flip the bits: 1 becomes 0, 0 becomes 1
+                rewards[flip_mask] = 1 - rewards[flip_mask]
             return None, rewards, True, {}
     # setup
-    means = [0, 0, 0, 0.8, 0.6]
+    means = [0.1, 0.1, 0.1, 0.8, 0.9]
     env = TestEnv(means)
     K = len(means)
     d = 2 
-    T = 10000
+    T = 100000
     alpha = 1.0  # exact oracle
     beta = 1.0   # always succeeds
     delta = 0.1
@@ -29,7 +34,8 @@ def test_cbarbar_no_corruption():
         return simple_greedy_oracle(np.array(weights), d, include)
 
     # run CBARBAR
-    algo = CBARBAR(env, oracle, T, alpha, beta, delta, d)
+    algo = CBARBAR(env, oracle, T, alpha, beta, delta, d, reward_function = "cascadian")
+    # algo = CBARBAR(env, oracle, T, alpha, beta, delta, d, reward_function = "linear")
     cum_rewards = algo.run()
     regrets = algo.compute_regret()
 

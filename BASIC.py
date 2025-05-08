@@ -9,9 +9,14 @@ class TestEnv:
         self.n_arms = len(means)
         self.original_means = means
 
-    def step(self, action):
+    def step(self, action, corr_percent = 0.4):
         # action: list of arms to pull
         rewards = (np.random.rand(len(action)) < self.means[action]).astype(float)
+        if corr_percent > 0:
+            # Generate a mask indicating which bits to flip
+            flip_mask = np.random.rand(len(rewards)) < corr_percent
+            # Flip the bits: 1 becomes 0, 0 becomes 1
+            rewards[flip_mask] = 1 - rewards[flip_mask]
         return None, rewards, True, {}
 
 
@@ -31,19 +36,21 @@ def basic_cucb(env, T, delta, k, k_max, alpha, d, return_policy=False):
     theta_i = {}
     N = {i: 0 for i in range(k, k_max + 1)}
     R_sum = {i: 0.0 for i in range(k, k_max + 1)}
+    history = {i: [] for i in range(k, k_max + 1)}
     for i in range(k, k_max + 1):
         theta_i[i] = 1.25 * alpha[i] * (2 ** i) + 21 * d * np.log(T / delta)
-        learners[i] = CorruptedCUCB(env, d, theta_i[i], T)
+        learners[i] = CorruptedCUCB(env, d, theta_i[i], T, reward_function = "cascadian")
 
     regrets = [] if return_policy else None
 
     for t in range(1, T + 1):
         idxs = list(range(k, k_max + 1))
         probs = np.array([alpha[i] for i in idxs])
-        probs /= probs.sum()
+        # probs /= probs.sum()
         i_t = np.random.choice(idxs, p=probs)
 
         S = learners[i_t].select()
+        history[i_t].append(tuple(S))
         _, rec, _, _ = env.step(S)
         learners[i_t].update(rec)
 
@@ -58,68 +65,79 @@ def basic_cucb(env, T, delta, k, k_max, alpha, d, return_policy=False):
             for j in idxs:
                 if j <= i: continue
                 lhs = R_sum[i]/alpha[i] + R_B(N[i], theta_i[i])/alpha[i]
-                rhs = R_sum[j]/alpha[j] - 8*(np.sqrt(t*np.log(T/delta))/alpha[j] + (np.log(T/delta)+theta_i[j])/alpha[j])
+                rhs = R_sum[j]/alpha[j] - 8*(np.sqrt(t*np.log(T/delta)/alpha[j]) + (np.log(T/delta)+theta_i[j])/alpha[j])
                 if lhs < rhs:
                     if return_policy:
                         return False, None, np.array(regrets)
                     else:
                         return False
+                    
     if return_policy:
-        pi_hat = learners[k].select()
+        if history[k]:
+            # count occurrences of each tuple
+            counts = {}
+            for arm_tuple in history[k]:
+                counts[arm_tuple] = counts.get(arm_tuple, 0) + 1
+            # pick the tuple with max count
+            pi_hat_tuple = max(counts, key=counts.get)
+            pi_hat = list(pi_hat_tuple)
+        else:
+            # fallback if learner k never got sampled: just its current select()
+            pi_hat = learners[k].select()
         return True, pi_hat, np.array(regrets)
     else:
         return True
 
-def cobe(env, T, delta, d, beta1, beta2, beta3):
-    """
-    COmponent BEllman (CoBE) meta-algorithm, Algorithm 2 from
-    "A Model Selection Approach for Corruption Robust RL" citeturn3file5.
+# def cobe(env, T, delta, d, beta1, beta2, beta3,
+#          excluded_policy=None, return_regrets=False):
+#     """
+#     COBE meta-algorithm (Alg.2), optionally excluding a given super-arm policy.
 
-    Iterates over hypothesized corruption levels 2^k and invokes BASIC (basic_cucb).
+#     Parameters
+#     ----------
+#     env: environment with .step(super_arm) and .original_means
+#     T: int
+#     delta: float
+#     d: int
+#     beta1, beta2, beta3: floats
+#     excluded_policy: list[int] or None
+#         If provided, cobe will skip any candidate pi_hat equal to this.
+#     return_regrets: bool
+#         If True, returns (k, pi_hat, regrets). Otherwise just k.
+#     """
+#     c_max = d
+#     # exponent range
+#     term = (np.sqrt(beta1 * T) + beta2 * c_max + beta3) / beta2
+#     k_init = max(int(np.ceil(np.log2(term))), 0)
+#     k_max  = int(np.ceil(np.log2(c_max * T)))
 
-    Parameters
-    ----------
-    env: environment supporting .step(super_arm) and .original_means
-    T: int
-        Total time horizon (rounds).
-    delta: float
-        Confidence parameter δ.
-    d: int
-        Maximum super-arm size (also c_max).
-    beta1: float
-        Parameter β₁ controlling initial term (e.g., 3·log T).
-    beta2: float
-        Parameter β₂ for scaling c_max term (e.g., 1).
-    beta3: float
-        Parameter β₃ additive offset (often 0).
+#     for k in range(k_init, k_max + 1):
+#         # build sampling weights alpha_i over {k..k_max}
+#         alpha = {}
+#         rem = 1.0
+#         for i in range(k+1, k_max+1):
+#             alpha[i] = 2 ** (k - i - 1)
+#             rem -= alpha[i]
+#         alpha[k] = rem
 
-    Returns
-    -------
-    Smallest k for which BASIC returns True, or None if none succeed.
-    """
-    c_max = d
+#         # run BASIC to get candidate policy and regrets
+#         ok, pi_hat, regrets = basic_cucb(
+#             env, T, delta, k, k_max, alpha, d,
+#             return_policy=True
+#         )
+#         # if excluded, skip this k
+#         if excluded_policy is not None and set(pi_hat) == set(excluded_policy):
+#             continue
 
-    # Determine exponent range
-    term = (np.sqrt(beta1 * T) + beta2 * c_max + beta3) / beta2
-    k_init = int(np.ceil(np.log2(term)))
-    k_init = max(k_init, 0)
-    k_max = int(np.ceil(np.log2(c_max * T)))
+#         if ok:
+#             if return_regrets:
+#                 return k, pi_hat, regrets
+#             return k
 
-    # Loop over candidate corruption exponents
-    for k in range(k_init, k_max + 1):
-        # Build sampling weights α_i over {k,...,k_max}
-        alpha = {}
-        rem = 1.0
-        for i in range(k + 1, k_max + 1):
-            alpha[i] = 2 ** (k - i - 1)
-            rem -= alpha[i]
-        alpha[k] = rem
-
-        # Invoke BASIC meta-algorithm with budgets 2^i
-        ok = basic_cucb(env, T, delta, k, k_max, alpha, d)
-        if ok:
-            return k
-    return None
+#     # no k succeeded
+#     if return_regrets:
+#         return None, None, np.array([])
+#     return None
 
 class GCOBE:
     """
@@ -138,7 +156,141 @@ class GCOBE:
         self.mu_star = np.sum(np.sort(mu)[-d:]) if linear else None
         self.regrets = []
 
-    def run(self):
+        self.N = {}
+        self.R_sum = {}
+        self.history = {}
+
+
+        self.pi_hat = None
+
+
+    def reset(self):
+        self.regrets = []
+        self.N = {}
+        self.R_sum = {}
+        self.history = {}
+    
+    def set_basic_history(self, k, k_max):
+        self.N = {i: 0 for i in range(k, k_max + 1)}
+        self.R_sum = {i: 0.0 for i in range(k, k_max + 1)}
+        self.history = {i: [] for i in range(k, k_max + 1)}
+
+    def basic_cucb(self, T, k, k_max, alpha, return_policy=False, excluded_policy=None):
+        """
+        BASIC meta-algorithm testing corruption budgets 2^i for i in [k..k_max],
+        optionally returning per-round regrets and the candidate policy.
+        """
+        self.set_basic_history(k, k_max)
+
+        def R_B(n, theta):
+            return np.sqrt(3 * n * np.log(T / self.delta)) + theta
+
+        learners = {}
+        theta_i = {}
+        
+        for i in range(k, k_max + 1):
+            theta_i[i] = 1.25 * alpha[i] * (2 ** i) + 21 * self.d * np.log(T / self.delta)
+            learners[i] = CorruptedCUCB(self.env, self.d, theta_i[i], T, excluded_policy = excluded_policy, reward_function = "cascadian")
+
+        regrets = [] if return_policy else None
+
+        for t in range(1, T + 1):
+            idxs = list(range(k, k_max + 1))
+            probs = np.array([alpha[i] for i in idxs])
+            # probs /= probs.sum()
+            i_t = np.random.choice(idxs, p=probs)
+
+            S = learners[i_t].select()
+            self.history[i_t].append(tuple(S))
+            _, rec, _, _ = self.env.step(S)
+            learners[i_t].update(rec)
+
+            if return_policy:
+                reward = sum(self.env.means[S])
+                regrets.append(self.mu_star - reward)
+
+            self.N[i_t] += 1
+            self.R_sum[i_t] += np.sum(rec)
+
+            for i in idxs:
+                for j in idxs:
+                    if j <= i: continue
+                    lhs = self.R_sum[i]/alpha[i] + R_B(self.N[i], theta_i[i])/alpha[i]
+                    rhs = self.R_sum[j]/alpha[j] - 8*(np.sqrt(t*np.log(T/self.delta)/alpha[j])
+                                            + (np.log(T/self.delta)+theta_i[j])/alpha[j])
+                    if lhs < rhs:
+                        if return_policy:
+                            return False, np.array(regrets)
+                        else:
+                            return False
+                        
+        if return_policy:
+            if self.history[k]:
+                # count occurrences of each tuple
+                counts = {}
+                for arm_tuple in self.history[k]:
+                    counts[arm_tuple] = counts.get(arm_tuple, 0) + 1
+                # pick the tuple with max count
+                pi_hat_tuple = max(counts, key=counts.get)
+                self.pi_hat = list(pi_hat_tuple)
+            else:
+                # fallback if learner k never got sampled: just its current select()
+                self.pi_hat = learners[k].select()
+            return True, np.array(regrets)
+        else:
+            return True
+
+
+
+    def cobe(self, T, excluded_policy=None, return_regrets=False):
+        """
+        COBE meta-algorithm (Alg.2), optionally excluding a given super-arm policy.
+
+        Parameters
+        ----------
+        env: environment with .step(super_arm) and .original_means
+        T: int
+        delta: float
+        d: int
+        beta1, beta2, beta3: floats
+        excluded_policy: list[int] or None
+            If provided, cobe will skip any candidate pi_hat equal to this.
+        return_regrets: bool
+            If True, returns (k, pi_hat, regrets). Otherwise just k.
+        """
+        c_max = self.d
+        # exponent range
+        term = (np.sqrt(self.beta1 * T) + self.beta2 * c_max + self.beta3) / self.beta2
+        k_init = max(int(np.ceil(np.log2(term))), 0)
+        k_max  = int(np.ceil(np.log2(c_max * T)))
+
+        for k in range(k_init, k_max + 1):
+            # build sampling weights alpha_i over {k..k_max}
+            alpha = {}
+            rem = 1.0
+            for i in range(k+1, k_max+1):
+                alpha[i] = 2 ** (k - i - 1)
+                rem -= alpha[i]
+            alpha[k] = rem
+
+            # run BASIC to get candidate policy and regrets
+            ok, regrets = self.basic_cucb(T, k, k_max, alpha, True, excluded_policy)
+            # if excluded, skip this k
+            if excluded_policy is not None and set(self.pi_hat) == set(excluded_policy):
+                continue
+
+            if ok:
+                if return_regrets:
+                    return k, regrets
+                return k
+
+        # no k succeeded
+        if return_regrets:
+            return None, np.array([])
+        return None
+
+    def gcobe(self):
+        self.reset()
         Z = self.d
         k_init = int(np.ceil(np.log2((np.sqrt(self.beta1) + self.beta2*Z + self.beta3)/self.beta2)))
         k_init = max(k_init, 0)
@@ -150,47 +302,60 @@ class GCOBE:
             L = int(np.ceil((self.beta2*(2**k))**2 / beta4))
             if L > self.T: break
             # Phase 1: BASIC
-            alpha = {i:1/(k_max-k+1) for i in range(k,k_max+1)} #IMPLEMENT THE CRRECT ALPHA
-            ok, pi_hat, rp1 = basic_cucb(self.env, L, self.delta, 
-                                         k, k_max, alpha,
-                                           self.d, return_policy=True)
-            self.regrets.extend(rp1.tolist())
+            alpha = {}
+            rem = 1.0
+            for i in range(k+1, k_max+1):
+                alpha[i] = 2 ** (k - i - 1)
+                rem -= alpha[i]
+            alpha[k] = rem
+            ok, rp1 = self.basic_cucb(L, k, k_max, alpha, return_policy = True)
+            self.regrets += rp1.tolist()
             t += L
             if ok:
                 # Phase 2: TwoModelSelect
-                challenger = None  # TODO: construct challenger on pi_hat
-                tms = TwoModelSelect(self.env, L, pi_hat, challenger, self.beta1, self.beta2, self.beta3, beta4, self.T, linear=self.linear)
+                # challenger = self.cobe(env, T,
+                #                 self.beta1, self.beta2, self.beta3,
+                #                 return_regrets=True)
+                tms = TwoModelSelect(self.env, L, self.delta, self.d, self.pi_hat, self.beta1, 
+                                    self.beta2, self.beta3, beta4, self.T, linear=self.linear)
                 rp2 = tms.run_and_record(self.mu_star)
-                self.regrets.extend(rp2.tolist()); t += len(rp2)
+                self.regrets += rp2.tolist() 
+                t += len(rp2)
                 # Phase 3: COBE fallback
                 rem = self.T - t
                 if rem>0:
-                    rp3 = cobe(self.env, rem, self.delta, self.d, self.beta1, self.beta2, self.beta3, return_regrets=True)
-                    self.regrets.extend(rp3.tolist())
+                    _, rp3 = self.cobe(rem, return_regrets=True)
+                    self.regrets += rp3.tolist()
                 break
         if len(self.regrets)<self.T:
             self.regrets += [0.0]*(self.T-len(self.regrets))
         return np.array(self.regrets)
 
-# means = [0.2, 0.5, 0.3, 0.8, 0.6]
+# --- Test parameters ---
 means = [0, 0, 0, 0.8, 0.6]
 env = TestEnv(means)
+b_1 = 1
 d = 2
-T = 10000
+T = 100000
 delta = 0.1
+beta1 = len(means) * np.log(T) * d * b_1
+beta2 = (len(means) / d) * (np.log(T))
+beta3 = len(means)
 
-# Uniform alpha over single index for k=k_max=0
-alpha = {0: 1.0}
+# Instantiate and run GCOBE
+algo = GCOBE(env, T, delta, d, beta1, beta2, beta3)
+regrets = algo.gcobe()
+# Sanity checks
+assert len(regrets) == T, f"Expected {T} regrets, got {len(regrets)}"
+assert np.all(regrets >= 0), "Regrets should be non-negative"
 
-# Run basic_cucb test
-success, pi_hat, regrets_basic = basic_cucb(env, T, delta, 0, 0, alpha, d, return_policy=True)
-cum_regret_basic = np.cumsum(regrets_basic)
-
-# Plot aggregated regret per round for basic_cucb
-plt.figure()
-plt.plot(cum_regret_basic, label='BASIC-CUCB')
+# Plot cumulative regret
+cum_regret = np.cumsum(regrets)
+plt.figure(figsize=(8, 4))
+plt.plot(np.arange(1, T+1), cum_regret, label='G-COBE Cumulative Regret')
 plt.xlabel('Round t')
 plt.ylabel('Cumulative Regret')
-plt.title('BASIC-CUCB: Aggregated Regret per Round')
+plt.title('G-COBE: Aggregated Regret per Round')
 plt.legend()
+plt.grid(True)
 plt.show()
