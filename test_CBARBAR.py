@@ -1,30 +1,43 @@
 import numpy as np
 from CBARBAR import CBARBAR, simple_greedy_oracle
 import matplotlib.pyplot as plt
+from time import sleep
 def test_cbarbar_no_corruption():
 
     # A simple test environment
     class TestEnv:
-        def __init__(self, means):
+        def __init__(self, means, C=0):
             self.means = np.array(means)
             self.n_arms = len(means)
             self.original_means = means
+            self.C = C
+            self.bestarmrew = np.max(means)
 
-        def step(self, action, corr_percent = 0.4):
+        def step(self, action, corr_percent = 0):
             # action: list of arms to pull
             rewards = (np.random.rand(len(action)) < self.means[action]).astype(float)
+            if self.C > 0:
+                for ind in action:
+                    if (means[ind] != self.bestarmrew) and (rewards[action.index(ind)] == 0):
+                        rewards[action.index(ind)] = 1
+                        self.C -= 1
+                    if (means[ind] == self.bestarmrew) and (rewards[action.index(ind)] == 1):
+                        rewards[action.index(ind)] = 0
+                        self.C -= 1
             if corr_percent > 0:
                 # Generate a mask indicating which bits to flip
                 flip_mask = np.random.rand(len(rewards)) < corr_percent
                 # Flip the bits: 1 becomes 0, 0 becomes 1
                 rewards[flip_mask] = 1 - rewards[flip_mask]
+  
             return None, rewards, True, {}
     # setup
-    means = [0.1, 0.1, 0.1, 0.8, 0.9]
-    env = TestEnv(means)
+    means = [0, 0, 1, 1, 1, 0, 0, 0, 0, 0]
+    C = 100000
+    env = TestEnv(means, C)
     K = len(means)
-    d = 2 
-    T = 100000
+    d = 3 
+    T = 200000
     alpha = 1.0  # exact oracle
     beta = 1.0   # always succeeds
     delta = 0.1

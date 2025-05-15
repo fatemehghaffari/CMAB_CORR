@@ -61,18 +61,18 @@ class CBARBAR:
         Z_star = self.oracle(np.zeros(self.K))
 
         # λ ← 1024 · [log₂(8K / (δ · (log₂ T)²))]²
-        lam = 64 * np.log2(((8 * self.K) / (self.delta)) * (np.log2(self.T)))
+        lam = 4 * np.log2(((8 * self.K) / (self.delta)) * (np.log2(self.T)))
         t = 0
         cumulative_rewards = []
         m = 1
 
         while t < self.T:
+            print(t, Z_star)
             nm_star = lam * (self.d ** 2) * self.K * (2 ** ((m - 1) / 2))
             nm_i = lam * (self.d / Delta) ** 2  # vector of length K
             N = nm_star + nm_i.sum()
             q_star = nm_star / N
             q_i = nm_i / N
-
             sum_rewards = np.zeros(self.K)
             # no longer need count_pulls—use nm_i directly
             for _ in range(int(N)):
@@ -99,7 +99,10 @@ class CBARBAR:
             mu_hat = np.zeros(self.K)
             for i in range(self.K):
                 if nm_i[i] > 0:
-                    mu_hat[i] = sum_rewards[i] / nm_i[i]
+                    if i in Z_star:
+                        mu_hat[i] = sum_rewards[i] / (nm_i[i] + nm_star)
+                    else:
+                        mu_hat[i] = sum_rewards[i] / nm_i[i]
             # print("sum_rewards", sum_rewards)
             # compute lower confidence bound
             LCB = mu_hat - Delta / (16 * self.d)

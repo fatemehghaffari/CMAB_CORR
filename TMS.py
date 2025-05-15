@@ -21,8 +21,9 @@ class TwoModelSelect:
     linear: bool
         If True, use linear reward aggregation.
     """
-    def __init__(self, env, L, delta, d, pi_hat, beta1, beta2, beta3, beta4, T, linear=True):
+    def __init__(self, env, L, delta, d, pi_hat, beta1, beta2, beta3, beta4, T, linear=True, reward_function = 'linear'):
         self.env = env
+        self.reward_function = reward_function
         self.L = L
         self.delta = delta
         self.d = d
@@ -38,18 +39,26 @@ class TwoModelSelect:
     def RB(self, t, theta):
         """Confidence function RB(t, θ) = √(β1·t) + β2·θ + β3."""
         return np.sqrt(self.beta1 * t) + self.beta2 * theta + self.beta3
+    
+    def reward_func(self, rewards):
+        """
+        Aggregates a list of arm rewards into a super-arm reward.
+        If linear, returns sum; otherwise placeholder for non-linear.
+        """
+        if self.reward_function == 'linear':
+            return np.sum(rewards)
+        elif self.reward_function == 'cascadian':
+            return 1 - np.prod(1 - rewards)
+        # non-linear aggregator goes here
+        raise NotImplementedError("Non-linear reward aggregation not yet implemented")
 
     def reward_agg(self, rewards):
         """Aggregate per-arm rewards into super-arm reward."""
         if self.linear:
-            return np.sum(rewards)
+            return self.reward_func(rewards)
         else:
             raise NotImplementedError("Non-linear aggregation not implemented")
 
-    def run(self):
-        """Original run() without regret recording."""
-        # (Unchanged; see run_and_record for instrumented version.)
-        return
 
     def run_and_record(self, mu_star):
         """
@@ -59,8 +68,8 @@ class TwoModelSelect:
         -------
         numpy.ndarray of regrets over at most L rounds.
         """
-        from BASIC import GCOBE
-
+        
+        from BASIC import GCOBE, oracle
         # Initialize gap estimate and epoch length
         delta_hat = min(np.sqrt(self.beta4 / self.L), 1.0)
         M = int(np.ceil(self.beta4 / (delta_hat ** 2)))
@@ -76,7 +85,7 @@ class TwoModelSelect:
             # if hasattr(self.challenger, 'reset'):
             #     self.challenger.reset()
             # Statistics
-            challenger = GCOBE(self.env, M - 1, self.delta, self.d, self.beta1, self.beta2, self.beta3, linear=True)
+            challenger = GCOBE(oracle, self.env, M - 1, self.delta, self.d, self.beta1, self.beta2, self.beta3, reward_function=self.reward_function)
             sum0 = 0.0
             sum1 = 0.0
             count0 = 0

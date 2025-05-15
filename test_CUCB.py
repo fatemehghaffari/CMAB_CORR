@@ -16,9 +16,9 @@ class TestEnv:
 
 means = [0.1, 0.1, 0.1, 0.8, 0.9]
 env = TestEnv(means)
-d = 2
-C = 0  # no corruption
-T = 10000
+d = 4
+C = 100000  # no corruption
+T = 200000
 
 
 
